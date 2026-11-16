@@ -193,6 +193,11 @@ bool stage1_recovery_window(void)
  * (m1n1.wdt=keep, wdt_kick()): the machine resets into the stage 1's fallback within its timeout.
  * Returns true when the host set the next stage.
  */
+#ifdef HANDOFF_DEBUG
+/* A host had the hostwait window and released the boot: give it the proxy again before vectoring */
+static bool hostwait_hold;
+#endif
+
 static bool hostwait_window(void)
 {
     u32 window_ms = HOSTWAIT_MS;
@@ -221,6 +226,9 @@ static bool hostwait_window(void)
         return true;
     }
     printf("hostwait: host released the boot\n");
+#ifdef HANDOFF_DEBUG
+    hostwait_hold = true;
+#endif
     return false;
 }
 #endif
@@ -547,6 +555,21 @@ next_stage:
         panic("Refusing next stage while secondary callbacks are pending\n");
     }
 
+#if defined(HANDOFF_DEBUG) && defined(HOSTWAIT_MS) && HOSTWAIT_MS > 0
+    /*
+     * Debug builds: the next stage is ready (kboot done, its device tree final at args[0]) and
+     * nothing is shut down yet, USB included. A host that had the hostwait window gets the proxy
+     * again to read the log (con_buf, logbuf) and the tree; P_EXIT vectors, no host vectors too.
+     */
+    if (hostwait_hold) {
+        printf("hostwait: next stage %p, dt 0x%lx ready: proxy for %u s before vectoring\n",
+               next_stage.entry, next_stage.args[0], HANDOFF_HOLD_MS / 1000);
+        enum stage1_proxy_result held = uartproxy_wait_stage1(HANDOFF_HOLD_MS);
+        if (held == STAGE1_PROXY_CDC || held == STAGE1_PROXY_KIS)
+            uartproxy_run_presynced();
+        printf("hostwait: vectoring\n");
+    }
+#endif
     printf("Preparing to run next stage at %p...\n", next_stage.entry);
 
     if (!nvme_shutdown()) {
@@ -577,7 +600,13 @@ next_stage:
         }
     }
 #ifdef USE_FB
+#ifdef HANDOFF_DEBUG
+    /* Debug builds: leave the last screen of the log on the panel for the OS to draw over */
+    printf("Vectoring to next stage (screen kept)...\n");
+    fb_set_active(false);
+#else
     fb_shutdown(next_stage.restore_logo);
+#endif
 #endif
     mmu_shutdown();
 #endif

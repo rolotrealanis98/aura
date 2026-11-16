@@ -43,6 +43,13 @@
 # define STAGE2_FALLBACK_WINDOW_MS 30000
 #endif
 
+// HANDOFF_DEBUG (debug builds, EXTRA_CFLAGS=-DHANDOFF_DEBUG): a plain stage 2 whose hostwait window
+// had a host gives it the proxy again for HANDOFF_HOLD_MS once the next stage is ready, before
+// anything is shut down; and the log stays on the panel at the hand-off instead of being cleared.
+#if defined(HANDOFF_DEBUG) && !defined(HANDOFF_HOLD_MS)
+# define HANDOFF_HOLD_MS 60000
+#endif
+
 #ifdef RELEASE
 # define FB_SILENT_MODE
 #endif
