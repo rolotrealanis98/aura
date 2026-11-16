@@ -24,6 +24,11 @@ void wdt_kick(void)
         write32(wdt_base + WDT_COUNT, 0);
 }
 
+bool wdt_left_armed(void)
+{
+    return wdt_kept;
+}
+
 static void wdt_off(bool force)
 {
     int path[8];
