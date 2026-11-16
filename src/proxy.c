@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: MIT AND GPL-2.0-only */
 
 #include "proxy.h"
+#include "chainload.h"
 #include "cpufreq.h"
 #include "dapf.h"
 #include "dart.h"
@@ -431,6 +432,15 @@ int proxy_process(ProxyRequest *request, ProxyReply *reply)
             free((void *)request->args[0]);
             break;
 
+        case P_CHAINLOAD_IMAGE:
+            // The host wrote a raw image into RAM. chainload_image() only prepares next_stage (as
+            // a stage 1 does from the ESP); leaving the proxy lets main() shut down and vector to
+            // it. Nothing is written outside RAM.
+            if (request->args[0] && request->args[1] > 0x800 && request->args[1] <= 0x10000000 &&
+                chainload_image((void *)request->args[0], request->args[1], NULL, 0) == 0)
+                return 1;
+            reply->retval = -1;
+            break;
         case P_KBOOT_BOOT:
 #ifdef SPTM_VIRT_ESP
             /* The Linux kboot/DT/GPU/PCIe tree is gated out of SPTM_VIRT_ESP builds (see

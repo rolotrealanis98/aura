@@ -188,6 +188,8 @@ typedef enum {
 
     P_READ_GIGALOCKER = 0x1400,
     P_FREE_GIGALOCKER,
+
+    P_CHAINLOAD_IMAGE = 0x1500, // hostwait: (image, size) -> chainload the raw image in RAM
 } ProxyOp;
 
 #define S_OK     0

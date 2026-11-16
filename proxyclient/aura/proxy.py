@@ -824,6 +824,8 @@ class AuraProxy(Reloadable):
     P_READ_GIGALOCKER = 0x1400
     P_FREE_GIGALOCKER = 0x1401
 
+    P_CHAINLOAD_IMAGE = 0x1500
+
     def __init__(self, iface, debug=False):
         self.debug = debug
         self.iface = iface
@@ -1357,6 +1359,9 @@ class AuraProxy(Reloadable):
         return self.request(self.P_READ_GIGALOCKER, buf)
     def free_gigalocker(self, buf):
         return self.request(self.P_FREE_GIGALOCKER, buf)
+    def chainload_image(self, image, size):
+        # hostwait stage 2 only; on success the device leaves the proxy and vectors to the image
+        return self.request(self.P_CHAINLOAD_IMAGE, image, size)
 
 __all__.extend(k for k, v in globals().items()
                if (callable(v) or isinstance(v, type)) and v.__module__ == __name__)

@@ -29,6 +29,14 @@
 // Change the 'channel' used by the dockchannel-uart iodev (if unset: 1)
 // #define DOCKCHANNEL_UART_CHANNEL 0
 
+// A plain (non-chainloading) stage 2 brings up the USB proxy before it boots its payload and waits
+// this long (ms) for a host to open it. A host that does can upload a test image into RAM and
+// chainload it (P_CHAINLOAD_IMAGE) or send P_EXIT to boot the payload; nobody there: the payload
+// boots as before. 0 disables the window. Stage 1 and ESP stage 2 builds keep their own windows.
+#if !defined(CHAINLOADING) && !defined(HOSTWAIT_MS)
+# define HOSTWAIT_MS 4000
+#endif
+
 #ifdef RELEASE
 # define FB_SILENT_MODE
 #endif

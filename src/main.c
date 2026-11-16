@@ -183,6 +183,48 @@ bool stage1_recovery_window(void)
 }
 #endif
 
+#if defined(HOSTWAIT_MS) && HOSTWAIT_MS > 0
+/*
+ * A plain stage 2 (the J716s' daily): bring up the USB proxy and give a host HOSTWAIT_MS to open it
+ * before the payload boots. Nothing here is persistent: the ESP is never touched, and every way
+ * out either boots the payload exactly as before (no host, or the host sends P_EXIT) or vectors to
+ * an image the host placed in RAM (P_CHAINLOAD_IMAGE, P_KBOOT_BOOT set next_stage). A host that
+ * opens the port and then goes silent stops feeding the watchdog the stage 1 left armed
+ * (m1n1.wdt=keep, wdt_kick()): the machine resets into the stage 1's fallback within its timeout.
+ * Returns true when the host set the next stage.
+ */
+static bool hostwait_window(void)
+{
+    u32 window_ms = HOSTWAIT_MS;
+
+    /*
+     * T6050 has no USB proxy of its own at start: aura's USB2 gadget there is an explicit,
+     * scheduled transition (usb_cdc_schedule(), at least 1 s out) that routes the left-back
+     * port's HPM to the controller. Schedule it here, and give the host the full window once it
+     * is up.
+     */
+    if (usb_cdc_deferred_usb2() && !usb_cdc_schedule(1000, 0, 0))
+        window_ms += 1000;
+    printf("hostwait: USB proxy window %u ms\n", window_ms);
+    enum stage1_proxy_result result = uartproxy_wait_stage1(window_ms);
+
+    stage1_window_done = true;
+    if (result != STAGE1_PROXY_CDC && result != STAGE1_PROXY_KIS) {
+        stage1_window_result = result;
+        printf("hostwait: no host\n");
+        return false;
+    }
+    printf("hostwait: host connected, running proxy\n");
+    uartproxy_run_presynced();
+    if (next_stage.entry) {
+        printf("hostwait: next stage set by the host\n");
+        return true;
+    }
+    printf("hostwait: host released the boot\n");
+    return false;
+}
+#endif
+
 void run_actions(void)
 {
     bool usb_up = false;
@@ -200,6 +242,12 @@ void run_actions(void)
         /* Announced as aura-proxy's window is: host tools claim the window on this line */
         printf("Stage 1: waiting %u s for a host\n", window_ms / 1000);
     }
+#if defined(HOSTWAIT_MS) && HOSTWAIT_MS > 0
+    /* A plain stage 2 has no Stage 1 window of its own: its host window is this one, and it runs
+     * only where a host may have the proxy (an enforcing build never gives it one). */
+    if (!window_ms && secboot_host_proxy_allowed() && hostwait_window())
+        return;
+#endif
     if (window_ms) {
         window_result = stage1_window_result = uartproxy_wait_stage1(window_ms);
         stage1_window_done = true;
