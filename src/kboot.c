@@ -39,6 +39,7 @@
 #include "secboot.h"
 #include "sep.h"
 #include "sio.h"
+#include "s2r_reset.h"
 #include "smp.h"
 #include "tunables.h"
 #include "types.h"
@@ -713,6 +714,9 @@ static bool smp_secondary_ran_outside_ctxr(void)
  * The mailbox tells the OS so: a secondary returns through its spin-table release address,
  * the boot core through the mailbox. The CPUs keep spin-table, which every kernel knows.
  */
+static int dt_get_or_add_reserved_mem(const char *node_name, const char *compat, bool nomap,
+                                      u64 paddr, size_t size);
+
 static int dt_set_s2r_mailbox(int node)
 {
     if (!in_el2())
@@ -741,10 +745,29 @@ static int dt_set_s2r_mailbox(int node)
         return 0;
     }
 
-    u64 mailbox = smp_s2r_publish();
+    /*
+     * A page the OS can read for every RVBAR entry after this (s2r_reset.h): taken off the top
+     * of RAM like the log buffer, so the OS never allocates it, and shown as an MTD.
+     */
+    u64 reset_log = top_of_memory_alloc(S2R_RESET_LOG_SIZE);
+    if (reset_log) {
+        char name[48];
+        snprintf(name, sizeof(name), "flash@%lx", reset_log);
+        int mtd = dt_get_or_add_reserved_mem(name, "phram", false, reset_log, S2R_RESET_LOG_SIZE);
+        if (mtd < 0 || fdt_setprop_string(dt, mtd, "label", "aura_s2r_resets")) {
+            printf("FDT: no S2R reset record\n");
+            reset_log = 0;
+        }
+        /* The reserved-memory node moved the tree: find /chosen again. */
+        node = fdt_path_offset(dt, "/chosen");
+        if (node < 0)
+            bail("FDT: /chosen not found\n");
+    }
+
+    u64 mailbox = smp_s2r_publish(reset_log);
     if (fdt_setprop_u64(dt, node, "aurora,s2r-mailbox", mailbox))
         bail("FDT: couldn't set aurora,s2r-mailbox\n");
-    printf("FDT: S2R mailbox at 0x%lx\n", mailbox);
+    printf("FDT: S2R mailbox at 0x%lx, RVBAR entry record at 0x%lx\n", mailbox, reset_log);
     return 0;
 }
 
@@ -1191,6 +1214,10 @@ static int dt_set_chosen(void)
 
     if (dt_set_s2r_mailbox(node))
         return -1;
+    /* It may have added a reserved-memory node, which can move /chosen. */
+    node = fdt_path_offset(dt, "/chosen");
+    if (node < 0)
+        bail("FDT: /chosen node not found in devtree\n");
 
     if (dt_set_hibernate_layout(node))
         return -1;

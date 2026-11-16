@@ -9,6 +9,7 @@
 #include "malloc.h"
 #include "memory.h"
 #include "pmgr.h"
+#include "s2r_reset.h"
 #include "soc.h"
 #include "string.h"
 #include "types.h"
@@ -543,13 +544,23 @@ struct aura_s2r_mailbox {
     u64 boot_mpidr; /* aura: the only core that may take resume_pa */
     u64 resume_pa;  /* OS, cleaned to PoC before it sleeps; aura clears it */
     u64 resumes;    /* aura: resume_pa taken this many times */
+    /* aura only, past what the OS reads: the RVBAR entry record (s2r_reset.h), or 0 */
+    u64 reset_log;
 };
 
 static struct aura_s2r_mailbox s2r_mailbox SMP_SHARED ALIGNED(64);
 
-/* Returns the mailbox's physical address: aura's mapping is the identity. */
-u64 smp_s2r_publish(void)
+/*
+ * Returns the mailbox's physical address: aura's mapping is the identity. reset_log is a page
+ * kboot keeps from the OS and shows it, for s2r_reset.h's record, or 0 for none.
+ */
+u64 smp_s2r_publish(u64 reset_log)
 {
+    if (reset_log) {
+        s2r_reset_log_init((struct s2r_reset_log *)reset_log, mrs(CNTPCT_EL0), mrs(CNTFRQ_EL0));
+        dc_cvac_range((void *)reset_log, sizeof(struct s2r_reset_log));
+    }
+    s2r_mailbox.reset_log = reset_log;
     s2r_mailbox.magic = AURA_S2R_MAGIC;
     s2r_mailbox.boot_mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
     s2r_mailbox.resume_pa = 0;
@@ -566,6 +577,22 @@ bool smp_s2r_published(void)
 }
 
 /*
+ * A core entering at RVBAR with the OS live: one line in its slot of the record, cleaned and
+ * invalidated to the point of coherency so that the OS reads it fresh. The MMU is off here.
+ */
+static void smp_s2r_note_reset(enum s2r_reset_action action)
+{
+    struct s2r_reset_slot *slot = s2r_reset_log_note((struct s2r_reset_log *)s2r_mailbox.reset_log,
+                                                     mrs(MPIDR_EL1), action, mrs(CNTPCT_EL0));
+
+    if (!slot)
+        return;
+    sysop("dsb sy");
+    dc_civac_range(slot, sizeof(*slot));
+    sysop("dsb sy");
+}
+
+/*
  * The boot core back from a sleep, with the OS live: nothing here may rerun the boot
  * flow. The OS gets EL2h with the MMU and caches off and interrupts masked, as at
  * first entry, and init_cpu() has redone the per-core setup. The watchdog is the
@@ -578,17 +605,26 @@ void smp_s2r_return_to_os(void)
     /* exception_initialize() unmasked everything. */
     msr(DAIF, 0xf << 6);
 
-    /* A reset the OS didn't arm: reboot rather than guess what state it's in. */
-    bool armed = entry && (mrs(MPIDR_EL1) & 0xFFFFFF) == s2r_mailbox.boot_mpidr;
+    enum s2r_reset_action action =
+        s2r_reset_decide(true, true, entry, mrs(MPIDR_EL1), s2r_mailbox.boot_mpidr);
+    smp_s2r_note_reset(action);
+
+    /*
+     * A reset the OS didn't arm has no OS state to return to. Rebooting from under a running
+     * OS looked like an orderly restart and left nothing behind; park instead, interrupts
+     * masked, so the OS reports the core gone and the record says when. Nothing is printed:
+     * the DockChannel, USB and the display are the OS's.
+     */
+    if (action != S2R_RESET_RESUME_OS) {
+        while (1)
+            sysop("wfe");
+    }
     /*
      * One line on the always-on DockChannel only: USB and the display are the OS's. Only
      * if it fits: with nobody draining the FIFO (a T6040, whose OS keeps the DockChannel
      * off), a waiting write held the boot core here until the SMC watchdog reset the SoC.
      */
-    dockchannel_uart_try_puts(armed ? "aura: S2R wake, resuming the OS"
-                                    : "aura: S2R reset not armed, rebooting");
-    if (!armed)
-        reboot();
+    dockchannel_uart_try_puts("aura: S2R wake, resuming the OS");
 
     s2r_mailbox.resume_pa = 0;
     s2r_mailbox.resumes++;
@@ -602,6 +638,9 @@ void smp_secondary_entry(void)
 {
     u64 mpidr = mrs(MPIDR_EL1) & 0xFFFFFF;
     int index = chip_id == T8152 ? smp_id() : target_cpu;
+
+    if (smp_s2r_published())
+        smp_s2r_note_reset(S2R_RESET_SECONDARY);
 
     if (chip_id == T8152)
         mmu_init_secondary_local();
