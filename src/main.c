@@ -80,6 +80,31 @@ void get_device_info(void)
     printf("\n");
 }
 
+#if !defined(CHAINLOADING) && !(defined(HOSTWAIT_MS) && HOSTWAIT_MS > 0)
+/*
+ * A plain stage 2 without the host window still brings the T6050 USB2 controller up as the window
+ * does (usb_cdc_schedule(), the same 1 s transition; main() stops it before vectoring), only with
+ * no host to wait for. On the J716s the kernel needs the USB side in that state: the build with
+ * the window booted Linux (2026-11-15, boot-aura-2), the one without it, which left the USB
+ * controller, its PHY and the PIPE mux as iBoot leaves them, wedged the only running CPU before
+ * apple_wdt fed the watchdog (boot-aura-1). The m1n1 stage 2 this replaces brought USB up before
+ * every hand-off too (its kboot ran usb_init(): controller up, the PIPE parked on the dummy
+ * producer, 0x42, the one value the kernel's T6050 combo PHY accepts at its first reset).
+ */
+static void t6050_usb_for_os(void)
+{
+    if (!usb_cdc_deferred_usb2() || usb_cdc_schedule(1000, 0, 0))
+        return;
+    u64 timeout = timeout_calculate(5000000);
+    while (!usb_cdc_ready() && !usb_cdc_failed() && !timeout_expired(timeout)) {
+        usb_cdc_poll();
+        mdelay(1);
+    }
+    printf("USB: T6050 USB2 controller %s before the hand-off\n",
+           usb_cdc_ready() ? "brought up" : "NOT brought up");
+}
+#endif
+
 /* Stage 1 runs at most one proxy window per boot: from its config or an aura-proxy request. */
 static bool stage1_window_done;
 static enum stage1_proxy_result stage1_window_result = STAGE1_PROXY_TIMEOUT;
@@ -255,6 +280,9 @@ void run_actions(void)
      * only where a host may have the proxy (an enforcing build never gives it one). */
     if (!window_ms && secboot_host_proxy_allowed() && hostwait_window())
         return;
+#elif !defined(CHAINLOADING)
+    if (!window_ms)
+        t6050_usb_for_os();
 #endif
     if (window_ms) {
         window_result = stage1_window_result = uartproxy_wait_stage1(window_ms);
@@ -600,8 +628,12 @@ next_stage:
         }
     }
 #ifdef USE_FB
-#ifdef HANDOFF_DEBUG
-    /* Debug builds: leave the last screen of the log on the panel for the OS to draw over */
+#if defined(HANDOFF_DEBUG) || !defined(CHAINLOADING)
+    /*
+     * Debug builds and plain stage 2s: leave the last screen of the log on the panel for the OS
+     * to draw over (only aura's own console state; the hardware is untouched either way), so a
+     * hang after the hand-off shows where aura stopped. boot-aura-2 booted this way.
+     */
     printf("Vectoring to next stage (screen kept)...\n");
     fb_set_active(false);
 #else
