@@ -200,6 +200,12 @@ bool ctxr_exec_confined(void)
     return confined;
 }
 
+int ctxr_exec_probed_free_cpu(void)
+{
+    ctxr_exec_confined();
+    return probe_free_cpu;
+}
+
 /*
  * aurora-installer pads the boot object of every chip that boots this way: 16 MiB
  * of __TEXT_EXEC for aura, then a 2 MiB aligned region of 128 MiB.
@@ -375,12 +381,6 @@ bool ctxr_exec_window(u64 *base, u64 *size)
     if (size)
         *size = window_size;
     return true;
-}
-
-int ctxr_exec_probed_free_cpu(void)
-{
-    ctxr_exec_confined();
-    return probe_free_cpu;
 }
 
 bool ctxr_exec_request_fixed_window(bool on)
