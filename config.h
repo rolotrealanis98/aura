@@ -37,6 +37,12 @@
 # define HOSTWAIT_MS 4000
 #endif
 
+// A plain stage 2 started with m1n1.wdt=keep that could not start its payload waits this long (ms)
+// for a host to open the proxy, then reboots so that its stage 1 starts the fallback slot (main.c).
+#if !defined(CHAINLOADING) && !defined(STAGE2_FALLBACK_WINDOW_MS)
+# define STAGE2_FALLBACK_WINDOW_MS 30000
+#endif
+
 #ifdef RELEASE
 # define FB_SILENT_MODE
 #endif
