@@ -22,6 +22,8 @@ __attribute__((noinline)) bool ctxr_range(enum ctxr_range range, u64 *start, u64
 /* Secondaries can't execute outside the armed CTXR windows at EL2. Asks a secondary, once a boot.
  */
 bool ctxr_exec_confined(void);
+/* The secondary that executed outside CTXR_D when probed, or -1 (none probed, or confined). */
+int ctxr_exec_probed_free_cpu(void);
 /* The physical window the OS runs in at EL2, false if there is none to use. */
 bool ctxr_exec_window(u64 *base, u64 *size);
 /*

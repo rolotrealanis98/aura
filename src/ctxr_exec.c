@@ -76,6 +76,9 @@ static const u32 probe_insns[] = {
 /* The CPU still holding an unanswered probe, or -1. */
 static int probe_stuck_cpu = -1;
 
+/* The secondary that ran the probe outside every window, or -1. */
+static int probe_free_cpu = -1;
+
 /*
  * Nothing answered, so the question stays open for a later call. Say so once, and
  * what CTXR_D reads, since an OS started now runs outside any window on this CPU.
@@ -188,6 +191,8 @@ bool ctxr_exec_confined(void)
     free(probe);
 
     confined = ret != 1;
+    if (!confined)
+        probe_free_cpu = cpu;
     if (confined)
         printf("CTXR exec: CPU %d could not run the heap probe (ESR 0x%lx): secondaries are "
                "confined at EL2\n",
@@ -370,6 +375,12 @@ bool ctxr_exec_window(u64 *base, u64 *size)
     if (size)
         *size = window_size;
     return true;
+}
+
+int ctxr_exec_probed_free_cpu(void)
+{
+    ctxr_exec_confined();
+    return probe_free_cpu;
 }
 
 bool ctxr_exec_request_fixed_window(bool on)

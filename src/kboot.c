@@ -691,6 +691,23 @@ static int dt_set_ctxr_exec_window(int node)
 }
 
 /*
+ * A secondary left reset through the locked RVBAR, as the boot core does on a wake, and then
+ * ran ctxr_exec_confined()'s probe outside CTXR_D. A probe that was not sent or not answered
+ * proves nothing.
+ */
+static bool smp_secondary_ran_outside_ctxr(void)
+{
+    int cpu = ctxr_exec_probed_free_cpu();
+
+    if (cpu < 0)
+        return false;
+    printf("FDT: CTXR_D is armed, but CPU %d left reset and ran the probe outside it: so will a "
+           "waking boot core\n",
+           cpu);
+    return true;
+}
+
+/*
  * An OS at EL2 has no monitor below it, so it powers cores off and suspends the system
  * itself, and where iBoot locked RVBAR a reset brings each core back through this image.
  * The mailbox tells the OS so: a secondary returns through its spin-table release address,
@@ -708,9 +725,16 @@ static int dt_set_s2r_mailbox(int node)
         return 0;
     }
 
-    /* A core leaving reset is confined to CTXR_D: an OS outside its window can't resume. */
+    /*
+     * Where a core leaving reset is confined to CTXR_D, an OS outside its window can't resume.
+     * A running secondary is such a core: it left reset through the same locked RVBAR the boot
+     * core takes on a wake. If one ran the probe outside CTXR_D (an m1n1 stage 1 left the
+     * register armed without the confinement: the T6050 chain), so does the waking boot core.
+     * With no secondary to ask, CTXR_D armed still refuses.
+     */
     u64 lower, upper;
-    if (ctxr_range(CTXR_RANGE_D, &lower, &upper) && !ctxr_exec_window(NULL, NULL)) {
+    if (ctxr_range(CTXR_RANGE_D, &lower, &upper) && !ctxr_exec_window(NULL, NULL) &&
+        !smp_secondary_ran_outside_ctxr()) {
         printf("FDT: no S2R mailbox: CTXR_D is armed and the OS is outside its window\n");
         fdt_setprop_string(dt, node, "aurora,s2r-unavailable",
                            "CTXR_D armed, OS outside its window");
