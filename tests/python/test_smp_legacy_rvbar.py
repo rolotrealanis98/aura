@@ -387,12 +387,20 @@ static unsigned char _vectors_start[4096] __attribute__((aligned(0x4000)));
 static int chip_id, el2 = 1, nmap;
 static u64 installed_relay, relocated_from, rvbar;
 static bool owned;
+/* This image above the earlier stage's base; the secondary-only window's end above both */
+static struct { u64 phys_base, mem_size, top_of_kernel_data; } cur_boot_args;
+static u64 image_base;
+#define _base ((char *)image_base)
 static u64 slot[2];   /* the retired vector table's slot 0, as two 64-bit words */
 static unsigned writes;
 #define LOCKED 0x800000000UL
 static u64 read64(u64 a) { if (a == 8) return rvbar; assert(a == LOCKED + 8); return slot[1]; }
 static u32 read32(u64 a)
 {
+    if (a == (u64)_vectors_start)
+        return 0xd2800609; /* mov x9, #0x30 */
+    if (a == LOCKED + 0x80 || a == LOCKED + 0x100 || a == LOCKED + 0x180)
+        return 0xd503201f; /* not ours: an earlier stage's table */
     assert(a == LOCKED || a == LOCKED + 4);
     return a == LOCKED ? (u32)slot[0] : (u32)(slot[0] >> 32);
 }
@@ -423,6 +431,10 @@ static void setup(int chip, bool own)
     chip_id = chip; owned = own; el2 = 1; nmap = 0; writes = 0;
     installed_relay = relocated_from = 0; slot[0] = 0x12345678; slot[1] = 0xabcd;
     rvbar = LOCKED | RVBAR_LOCK;
+    cur_boot_args.phys_base = 0x10000000UL;
+    cur_boot_args.mem_size = 0x1000000000UL;
+    cur_boot_args.top_of_kernel_data = 0x880000000UL;
+    image_base = 0x900000000UL;
 }
 int main(void)
 {
@@ -440,8 +452,28 @@ int main(void)
     rvbar = (LOCKED + 0x4000) | RVBAR_LOCK;
     assert(smp_prepare_rvbar(&cpu) == -1 && writes == 3);
 
-    /* Not a retired vector table (not ours to rewrite), or not EL2: refused, nothing written. */
+    /*
+     * Not a retired aura table: the J716s' m1n1 stage 1 (2026-11-15: one CPU). Its base below
+     * this image and the inherited top is forwarded, as the m1n1 stage 2 did.
+     */
     setup(T6050, false);
+    assert(smp_prepare_rvbar(&cpu) == 0 && writes == 3 && installed_relay == LOCKED);
+    assert(read32(LOCKED) == SMP_VENEER_LDR && slot[1] == target);
+    /* ... but not at or above the inherited top, */
+    setup(T6050, false);
+    cur_boot_args.top_of_kernel_data = LOCKED;
+    assert(smp_prepare_rvbar(&cpu) == -1 && !writes && !installed_relay);
+    /* not within 16 bytes of this image, */
+    setup(T6050, false);
+    image_base = LOCKED + 8;
+    assert(smp_prepare_rvbar(&cpu) == -1 && !writes && !installed_relay);
+    /* not outside RAM, */
+    setup(T6050, false);
+    cur_boot_args.phys_base = LOCKED + 0x4000;
+    assert(smp_prepare_rvbar(&cpu) == -1 && !writes && !installed_relay);
+    /* and never outside EL2. */
+    setup(T6050, false);
+    el2 = 0;
     assert(smp_prepare_rvbar(&cpu) == -1 && !writes && !installed_relay);
     setup(T6050, true);
     el2 = 0;

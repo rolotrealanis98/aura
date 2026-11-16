@@ -302,10 +302,34 @@ static int smp_prepare_rvbar_t6050(u64 locked, u64 target)
                installed_relay);
         return -1;
     }
-    if (!in_el2() || !smp_old_vector_owned(locked)) {
-        printf("SMP: RVBAR 0x%lx is not a retired image vector below this image; refusing start\n",
-               locked);
+    if (!in_el2()) {
+        printf("SMP: RVBAR 0x%lx: not at EL2; refusing start\n", locked);
         return -1;
+    }
+    if (!smp_old_vector_owned(locked)) {
+        /*
+         * The J716s' stage 1 is m1n1, not aura: on 2026-11-15 its table at the locked RVBAR (stage
+         * 1's base, 0x10004160000, with stage 1's 0x430000 image above it) failed the retired-aura
+         * test and Linux came up on one CPU. The m1n1 stage 2 this replaces forwards any locked
+         * RVBAR in RAM below itself, and started 18 CPUs behind that stage 1 on every boot. Do the
+         * same within aura's address bounds: RAM, the 16 veneer bytes below this image, and below
+         * the inherited top (the secondary-only CTRR window ends there). Say what the content test
+         * saw, for the record.
+         */
+        u64 inherited_top = cur_boot_args.top_of_kernel_data;
+        if (cur_boot_args.phys_base > UINT64_MAX - cur_boot_args.mem_size ||
+            locked < cur_boot_args.phys_base ||
+            locked >= cur_boot_args.phys_base + cur_boot_args.mem_size ||
+            locked >= inherited_top || locked + 16 > (u64)_base) {
+            printf("SMP: RVBAR 0x%lx is not RAM below this image and the inherited top 0x%lx; "
+                   "refusing start\n",
+                   locked, inherited_top);
+            return -1;
+        }
+        printf("SMP: RVBAR 0x%lx: not a retired aura image (slots %08x %08x %08x %08x, ours "
+               "%08x); an earlier stage's base below this image: forwarding it\n",
+               locked, read32(locked), read32(locked + 0x80), read32(locked + 0x100),
+               read32(locked + 0x180), read32((u64)_vectors_start));
     }
     return smp_write_veneer(locked, target);
 }
