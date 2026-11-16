@@ -253,6 +253,68 @@ static u64 old_vectors_start(void)
     return relocated_from ? relocated_from + ((u64)_vectors_start - (u64)_base) : 0;
 }
 
+/*
+ * Write "ldr x16, 1f; br x16; 1: .quad target" over slot 0 of a retired image's vector table and
+ * read it back. The distance to a relocated image can be out of a branch's reach, so the relay is
+ * absolute.
+ */
+static int smp_write_veneer(u64 locked, u64 target)
+{
+    u64 page = ALIGN_DOWN(locked, get_page_size());
+    if (mmu_active())
+        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RW);
+    write64(locked + 8, target);
+    write32(locked + 4, SMP_VENEER_BR);
+    write32(locked, SMP_VENEER_LDR);
+    dc_cvac_range((void *)locked, 16);
+    sysop("dsb sy");
+    ic_ivau_range((void *)locked, 16);
+    sysop("dsb sy");
+    sysop("isb");
+    if (mmu_active())
+        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RX);
+    if (read64(locked + 8) != target || read32(locked + 4) != SMP_VENEER_BR ||
+        read32(locked) != SMP_VENEER_LDR) {
+        printf("SMP: RVBAR veneer read-back failed at 0x%lx\n", locked);
+        return -1;
+    }
+    installed_relay = locked;
+    printf("SMP: installed RVBAR veneer at 0x%lx -> 0x%lx\n", locked, target);
+    return 0;
+}
+
+/*
+ * T6050: iBoot locks every secondary's RVBAR to the base of the image it loaded, stage 1. A stage 2
+ * with a kernel appended (about 38 MiB) does not fit between that base and the secondary-only CTRR
+ * window that ends at top_of_kernel_data (about 12 MiB on a J716s), so an m1n1 stage 1 stages it
+ * above the window and the secondaries reset into the retired stage 1's vectors. Forward them
+ * with a veneer, once. Only a table with this image's four vector slot tags, in RAM below this
+ * image and below the inherited top, followed by the STACKBOT marker of a retired image
+ * (smp_old_vector_owned), is rewritten. kboot keeps its page from the OS (smp_rvbar_relay()).
+ */
+static int smp_prepare_rvbar_t6050(u64 locked, u64 target)
+{
+    if (installed_relay) {
+        if (installed_relay == locked && read64(locked + 8) == target &&
+            read32(locked) == SMP_VENEER_LDR && read32(locked + 4) == SMP_VENEER_BR)
+            return 0;
+        printf("SMP: RVBAR 0x%lx differs from the relay at 0x%lx; refusing start\n", locked,
+               installed_relay);
+        return -1;
+    }
+    if (!in_el2() || !smp_old_vector_owned(locked)) {
+        printf("SMP: RVBAR 0x%lx is not a retired image vector below this image; refusing start\n",
+               locked);
+        return -1;
+    }
+    return smp_write_veneer(locked, target);
+}
+
+u64 smp_rvbar_relay(void)
+{
+    return installed_relay;
+}
+
 static int smp_prepare_rvbar(const struct cpu_info *cpu)
 {
     u64 rvbar = read64(cpu->impl_reg);
@@ -269,6 +331,8 @@ static int smp_prepare_rvbar(const struct cpu_info *cpu)
         printf("SMP: RVBAR 0x%lx differs from vector 0x%lx; refusing start\n", locked, target);
         return -1;
     }
+    if (chip_id == T6050)
+        return smp_prepare_rvbar_t6050(locked, target);
 
     /*
      * iBoot locked RVBAR somewhere else. Forward it with a branch when it is the boot object's
@@ -353,27 +417,7 @@ static int smp_prepare_rvbar_t8152(const struct cpu_info *cpu)
         printf("SMP: RVBAR 0x%lx is not a verified earlier image vector\n", locked);
         return -1;
     }
-    u64 page = ALIGN_DOWN(locked, get_page_size());
-    if (mmu_active())
-        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RW);
-    write64(locked + 8, target);
-    write32(locked + 4, SMP_VENEER_BR);
-    write32(locked, SMP_VENEER_LDR);
-    dc_cvac_range((void *)locked, 16);
-    sysop("dsb sy");
-    ic_ivau_range((void *)locked, 16);
-    sysop("dsb sy");
-    sysop("isb");
-    if (mmu_active())
-        mmu_add_mapping(page, page, get_page_size(), MAIR_IDX_NORMAL, PERM_RX);
-    if (read64(locked + 8) != target || read32(locked + 4) != SMP_VENEER_BR ||
-        read32(locked) != SMP_VENEER_LDR) {
-        printf("SMP: RVBAR veneer read-back failed at 0x%lx\n", locked);
-        return -1;
-    }
-    installed_relay = locked;
-    printf("SMP: installed RVBAR veneer at 0x%lx -> 0x%lx\n", locked, target);
-    return 0;
+    return smp_write_veneer(locked, target);
 }
 
 /* Whether a core whose RVBAR iBoot locked at @locked resets into this image. */
