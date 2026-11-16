@@ -5,6 +5,7 @@ static bool debug_enabled;
 static bool console_requested;
 static bool proxy_requested;
 static bool trial_running;
+static bool wdt_keep;
 static bool is_stage1;
 
 static bool boot_space(char c)
@@ -45,6 +46,7 @@ void boot_options_init(const char *line, size_t capacity)
     console_requested = boot_option_present(line, capacity, "aura-console");
     proxy_requested = boot_option_present(line, capacity, "aura-proxy");
     trial_running = boot_option_present(line, capacity, "aura-trial");
+    wdt_keep = boot_option_present(line, capacity, "m1n1.wdt=keep");
     is_stage1 = true;
 }
 
@@ -78,6 +80,16 @@ bool aura_proxy_enabled(void)
  * Set by the stage that took an aura-try marker (chainload.c) in the boot arguments of the next
  * stage, which every later aura stage copies forward: the boot runs under the trial watchdog.
  */
+/*
+ * m1n1.wdt=keep: a stage that armed the watchdog for this one (the J716s' A/B stage 1 arms 150 s)
+ * appends the token to this stage's boot arguments. The token keeps its m1n1 spelling because the
+ * stage that appends it is an m1n1 build. It is honoured in every stage, plain or ESP.
+ */
+bool boot_wdt_keep_enabled(void)
+{
+    return wdt_keep;
+}
+
 bool aura_trial_enabled(void)
 {
     return trial_running;

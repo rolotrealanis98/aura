@@ -6,7 +6,11 @@
 #include "types.h"
 
 void wdt_disable(void);
+/* Disarm even with m1n1.wdt=keep: a host asked for it */
+void wdt_disable_forced(void);
 void wdt_reboot(void);
+/* Reset the count of a watchdog left armed by m1n1.wdt=keep; nothing otherwise */
+void wdt_kick(void);
 int wdt_arm_seconds(unsigned seconds);
 /* The longest the 24 MHz counter allows, for each stage of a trial boot */
 #define WDT_TRIAL_SECONDS 178
