@@ -3779,6 +3779,31 @@ static T6050_TEXT void t6050_ext_handoff(void *dt)
     }
 }
 
+/*
+ * J716s (27.3): the four external engines stay with iBoot unless the kernel asks for them with
+ * its deep sleep's switch, the only user of them there: a firmware-driven sleep has to stop every
+ * display engine, and one left with iBoot keeps running with nothing to stop it (as on the
+ * K116s, aurora-silicon/linux#2075). Only on that image, and only for that exact token in
+ * /chosen/bootargs, which the payload's command line sets before the display's step.
+ */
+#define T6050_EXT_ASK "appledrm.j716s_deep_sleep=1"
+
+static T6050_TEXT bool t6050_ext_asked(void *dt)
+{
+    static const char tok[] = T6050_EXT_ASK;
+    int chosen = fdt_path_offset(dt, "/chosen"), len = 0;
+    const char *args = chosen < 0 ? NULL : fdt_getprop(dt, chosen, "bootargs", &len);
+    const size_t n = sizeof(tok) - 1;
+
+    if (os_firmware.version != V27_3B || !args || len <= 0 || args[len - 1])
+        return false;
+    for (int i = 0; i + (int)n <= len - 1; i++)
+        if ((i == 0 || args[i - 1] == ' ') && !memcmp(args + i, tok, n) &&
+            (args[i + n] == ' ' || args[i + n] == '\0'))
+            return true;
+    return false;
+}
+
 /* Any failure leaves the display nodes disabled: the boot framebuffer keeps the panel */
 static T6050_TEXT void t6050_handoff(void *dt)
 {
@@ -3792,6 +3817,11 @@ static T6050_TEXT void t6050_handoff(void *dt)
             dlog("internal display handed off: firmware %s, bw-scratch 0x%lx+0x%x, %u clock(s), "
                  "%u nits\n",
                  os_firmware.string, t6050.pmc, t6050.bw_offset, t6050.nclk, t6050.nits);
+            if (!t6050.ext && t6050_ext_asked(dt)) {
+                dlog("external display engines asked for by the kernel command line (" T6050_EXT_ASK
+                     ")\n");
+                t6050.ext = true;
+            }
             if (t6050.ext)
                 t6050_ext_handoff(dt);
             else
