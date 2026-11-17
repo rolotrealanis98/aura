@@ -3751,7 +3751,7 @@ static T6050_TEXT int t6050_ext_one(void *dt, int n)
     if (firmware_set_fdt(dt, kboot_fdt_path_exact(dt, path[0]), "apple,firmware-version",
                          &os_firmware) ||
         firmware_set_fdt(dt, kboot_fdt_path_exact(dt, path[0]), "apple,firmware-compat",
-                         &os_firmware) ||
+                         t6050.compat) ||
         fdt_setprop(dt, kboot_fdt_path_exact(dt, path[0]), "apple,firmware-uuid", t6050.uuid,
                     strlen(t6050.uuid) + 1) ||
         fdt_setprop(dt, kboot_fdt_path_exact(dt, path[0]), "apple,bw-scratch", v, sizeof(v)))
